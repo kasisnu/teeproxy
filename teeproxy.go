@@ -30,6 +30,8 @@ var (
 	tlsCertificate        = flag.String("cert.file", "", "path to the TLS certificate file")
 	forwardClientIP       = flag.Bool("forward-client-ip", false, "enable forwarding of the client IP to the backend using the 'X-Forwarded-For' and 'Forwarded' headers")
 	closeConnections      = flag.Bool("close-connections", false, "close connections to the clients and backends")
+	limitTo               = flag.String("limit-to", "", "http method types to stay limited to. ex, 'GET,HEAD'")
+	limited               = map[string]bool{}
 )
 
 // Sets the request URL.
@@ -104,7 +106,10 @@ func (h handler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 
 			timeout := time.Duration(*alternateTimeout) * time.Millisecond
 			// This keeps responses from the alternative target away from the outside world.
-			alternateResponse := handleRequest(alternativeRequest, timeout)
+			var alternateResponse *http.Response = nil
+			if shouldProxy(alternativeRequest) {
+				alternateResponse = handleRequest(alternativeRequest, timeout)
+			}
 			if alternateResponse != nil {
 				// NOTE(girone): Even though we do not care about the second
 				// response, we still need to close the Body reader. Otherwise
@@ -147,6 +152,10 @@ func (h handler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 
 func main() {
 	flag.Parse()
+
+	for _, method := range strings.Split(*limitTo, ",") {
+		limited[method] = true
+	}
 
 	log.Printf("Starting teeproxy at %s sending to A: %s and B: %s",
 		*listen, *targetProduction, *altTarget)
@@ -269,4 +278,11 @@ func insertOrExtendForwardedHeader(request *http.Request, remoteIP string) {
 		// insert
 		request.Header.Set(FORWARDED_HEADER, extension)
 	}
+}
+
+func shouldProxy(request *http.Request) bool {
+	if len(limited) == 0 {
+		return true
+	}
+	return limited[request.Method]
 }
